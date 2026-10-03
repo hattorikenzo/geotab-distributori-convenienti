@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Distributori Convenienti</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="./distributori.css?v=6">
+</head>
+<body>
+<div id="dc-root">
+  <div class="dc-wrap">
+    <header>
+      <div>
+        <h1>Distributori Convenienti</h1>
+        <p>Trova i prezzi MIMIT più convenienti entro 5 km dalla posizione del veicolo.</p>
+      </div>
+      <div class="dc-badge">MIMIT · 5 km</div>
+    </header>
+
+    <section class="dc-card dc-controls">
+      <div>
+        <label for="vehicle">Veicolo</label>
+        <select id="vehicle"><option value="">Caricamento veicoli…</option></select>
+      </div>
+      <div>
+        <label for="fuel">Carburante</label>
+        <select id="fuel">
+          <option value="Benzina">Benzina</option>
+          <option value="Gasolio">Gasolio</option>
+          <option value="GPL">GPL</option>
+          <option value="Metano">Metano</option>
+        </select>
+      </div>
+      <div>
+        <label for="mode">Modalità</label>
+        <select id="mode">
+          <option value="1">Self service</option>
+          <option value="0">Servito</option>
+        </select>
+      </div>
+      <button id="search" disabled>Cerca distributori</button>
+    </section>
+
+    <div id="status" class="dc-status">Connessione a MyGeotab…</div>
+
+    <section class="dc-grid">
+      <div class="dc-card dc-best">
+        <small>MIGLIOR PREZZO ENTRO 5 KM</small>
+        <div id="bestPrice" class="dc-price">—</div>
+        <strong id="bestName">Seleziona un veicolo</strong>
+        <div id="bestInfo" class="dc-muted">—</div>
+      </div>
+      <div class="dc-card dc-position">
+        <small>POSIZIONE VEICOLO</small>
+        <strong id="positionText">Indirizzo non disponibile</strong>
+        <div id="positionDate" class="dc-muted">—</div>
+      </div>
+    </section>
+
+    <section class="dc-card dc-map-card">
+      <div id="map"></div>
+    </section>
+
+    <section class="dc-card">
+      <div class="dc-table-title">
+        <h2>5 distributori più convenienti entro 5 km</h2>
+        <span id="count">0 impianti</span>
+      </div>
+      <div class="dc-tablewrap">
+        <table>
+          <thead><tr><th>#</th><th>Distributore</th><th>Distanza</th><th>Carburante</th><th>Modalità</th><th>Prezzo €/L</th><th>Aggiornamento MIMIT</th></tr></thead>
+          <tbody id="rows"><tr><td colspan="7" class="dc-empty">Seleziona un veicolo e avvia la ricerca.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="./distributori.js?v=6"></script>
+</body>
+</html>
