@@ -92,7 +92,7 @@ function isFreshMimitDate(value){
  return priceDay>=oldest && priceDay<=today;
 }
 
-async function latestPrice(station,fuel,mode){
+async function latestMimitPrice(station,fuel,mode){
  const bucket=String(Math.floor(station.id/1000)).padStart(3,"0");
 
  // Evita che GitHub Pages/browser restituiscano un vecchio gzip dalla cache.
@@ -149,6 +149,32 @@ async function latestPrice(station,fuel,mode){
  historical.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
  return historical.length ? {...historical[0],stale:!isFreshMimitDate(historical[0].date)} : null;
 }
+
+// Prezzi alternativi: l'importatore mantiene "modalita: non_verificata".
+// Non assegnare mai automaticamente la modalità self/servito richiesta.
+async function latestMapPrice(station,fuel){
+ const bucket=String(Math.floor(station.id/1000)).padStart(3,"0");
+ const url=`${DATA_BASE}/prezzi_mappa/${bucket}/${station.id}.json.gz?v=${new Date().toISOString().slice(0,10)}`;
+ const obj=await fetchGzip(url).catch(()=>null);
+ const r=obj?.carburanti?.[fuel];
+ if(!r || r.modalita!=="non_verificata")return null;
+ const price=Number(r.prezzo),date=String(r.data_utc||"");
+ if(!date || !Number.isFinite(Date.parse(date)) || !Number.isFinite(price) || price<=0)return null;
+ return {price,date,source:"Mappa Carburanti Italia",self:null,fuel,
+         unverified:true,stale:!isFreshMimitDate(date)};
+}
+
+async function latestPrice(station,fuel,mode){
+ const [mimit,alternative]=await Promise.all([
+  latestMimitPrice(station,fuel,mode),latestMapPrice(station,fuel)
+ ]);
+ // Il prezzo alternativo può sostituire quello MIMIT solo se la data
+ // è strettamente successiva. A parità di data prevale MIMIT verificato.
+ if(alternative && (!mimit || Date.parse(alternative.date)>Date.parse(mimit.date)))
+  return alternative;
+ return mimit;
+}
+
 function stationInfo(s){let r=s.raw;return {name:r[3]||r[6]||r[4]||`Impianto ${s.id}`,brand:r[4]||"",address:[r[7],r[8],r[9]].filter(Boolean).join(" — ")}}
 async function resolveAddress(lat,lon){
  try{
@@ -183,36 +209,45 @@ function selectStationMarker(s,row){
  const mapsUrl=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.lat+","+s.lon)}&travelmode=driving`;
  selectedStationMarker.on("click",()=>window.open(mapsUrl,"_blank","noopener,noreferrer"));
 }
+function priceDescription(p,mode){
+ return p.unverified ? "Mappa Carburanti · modalità non verificata" :
+  `MIMIT · ${mode==="1"?"Self service":"Servito"}`;
+}
 function render(results,fuel,mode){
  results.sort((a,b)=>a.price.price-b.price.price||a.distance-b.distance);
- let fresh=results.filter(s=>!s.price.stale);
- let top=(fresh.length?fresh:results).slice(0,5);
+ const fresh=results.filter(s=>!s.price.stale);
+ const pool=fresh.length?fresh:results;
+ const top=pool.slice(0,5);
  const historicalMode=!fresh.length&&results.length>0;
  $("count").textContent=`${top.length} di ${results.length} impianti con prezzo`;
- let tb=$("rows");tb.innerHTML="";
+ const tb=$("rows");tb.innerHTML="";
  if(selectedStationMarker){selectedStationMarker.remove();selectedStationMarker=null}
  if(!top.length){
-  tb.innerHTML='<tr><td colspan="7" class="dc-empty">Nessun prezzo MIMIT disponibile per i criteri selezionati.</td></tr>';
-  $("bestPrice").textContent="—";$("bestName").textContent="Nessun risultato";$("bestInfo").textContent="—";return;
+  tb.innerHTML='<tr><td colspan="7" class="dc-empty">Nessun prezzo disponibile per i criteri selezionati.</td></tr>';
+  $("bestPrice").textContent="—";$("bestName").textContent="Nessun risultato";$("bestInfo").textContent="—";
+  return;
  }
- let best=top[0],bi=stationInfo(best);
+ const best=top[0],bi=stationInfo(best);
  $("bestPrice").textContent=`€ ${dec(best.price.price,3)}/L`;
  $("bestName").textContent=bi.name;
- $("bestInfo").textContent=`${historicalMode?"⚠ PREZZO STORICO NON AGGIORNATO · ":""}${(best.distance/1000).toFixed(2).replace(".",",")} km · ${mode==="1"?"Self service":"Servito"} · comunicazione MIMIT ${dt(best.price.date)}`;
- let rowMap=new Map();
+ $("bestInfo").textContent=`${historicalMode?"⚠ PREZZI NON RECENTI · ":""}${(best.distance/1000).toFixed(2).replace(".",",")} km · ${priceDescription(best.price,mode)} · comunicazione ${dt(best.price.date)}`;
+ const rowMap=new Map();
  top.forEach((s,i)=>{
-  let info=stationInfo(s),tr=document.createElement("tr");
+  const info=stationInfo(s),tr=document.createElement("tr"),p=s.price;
   if(i===0)tr.className="dc-best-row";
   tr.tabIndex=0;tr.title="Clicca per mostrare questo distributore sulla mappa";
-  tr.innerHTML=`<td>${i+1}</td><td><div class="dc-station">${esc(info.name)}</div><div class="dc-address">${esc(info.address)}</div></td><td>${(s.distance/1000).toFixed(2).replace(".",",")} km</td><td>${esc(fuel)}</td><td>${mode==="1"?"Self":"Servito"}</td><td class="dc-num">€ ${dec(s.price.price,3)}</td><td>${s.price.stale?"⚠ Storico · ":""}${esc(dt(s.price.date))}</td>`;
+  const modeLabel=p.unverified?"⚠ Non verificata":(mode==="1"?"Self":"Servito");
+  const sourceLabel=p.unverified?"Mappa Carburanti":"MIMIT";
+  tr.innerHTML=`<td>${i+1}</td><td><div class="dc-station">${esc(info.name)}</div><div class="dc-address">${esc(info.address)}</div></td><td>${(s.distance/1000).toFixed(2).replace(".",",")} km</td><td>${esc(fuel)}</td><td>${modeLabel}</td><td class="dc-num">€ ${dec(p.price,3)}</td><td>${p.stale?"⚠ Storico · ":""}${esc(dt(p.date))}<div class="dc-address">${sourceLabel}</div></td>`;
   tr.addEventListener("click",()=>selectStationMarker(s,tr));
   tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selectStationMarker(s,tr)}});
   tb.appendChild(tr);rowMap.set(s,tr);
  });
- // All'inizio mostra sulla mappa soltanto il distributore più vicino tra i 5 visualizzati.
- let nearest=[...top].sort((a,b)=>a.distance-b.distance)[0];
+ // Mantiene il comportamento originale: inizialmente marker della stazione più vicina.
+ const nearest=[...top].sort((a,b)=>a.distance-b.distance)[0];
  selectStationMarker(nearest,rowMap.get(nearest));
 }
+
 async function search(){
  let vid=$("vehicle").value;if(!vid)return;
  $("search").disabled=true;$("status").className="dc-status";$("status").textContent="Recupero ultima posizione del veicolo…";
@@ -220,18 +255,18 @@ async function search(){
   let v=vehicles.find(x=>x.id===vid)||{},fuel=$("fuel").value,mode=$("mode").value;
   let p=await latestPosition(vid);if(!p)throw new Error("Nessuna posizione GPS disponibile negli ultimi 14 giorni.");
   await showPosition(p);
-  $("status").textContent="Ricerca impianti MIMIT entro 5 km…";
+  $("status").textContent="Ricerca impianti entro 5 km…";
   let stations=await stationsWithin(Number(p.latitude),Number(p.longitude));
-  $("status").textContent=`Trovati ${stations.length} impianti. Lettura prezzi MIMIT correnti…`;
+  $("status").textContent=`Trovati ${stations.length} impianti. Lettura prezzi MIMIT e Mappa Carburanti…`;
   let results=[],batch=20;
   for(let i=0;i<stations.length;i+=batch){
    let part=stations.slice(i,i+batch);
    let prices=await Promise.all(part.map(s=>latestPrice(s,fuel,mode)));
    part.forEach((s,j)=>{if(prices[j])results.push({...s,price:prices[j]})});
-   $("status").textContent=`Lettura prezzi MIMIT: ${Math.min(i+batch,stations.length)} / ${stations.length} impianti…`;
+   $("status").textContent=`Lettura prezzi MIMIT e Mappa: ${Math.min(i+batch,stations.length)} / ${stations.length} impianti…`;
   }
   render(results,fuel,mode);
-  $("status").className="dc-status ok";$("status").textContent=`Completato: ${results.length} distributori con prezzo ${fuel} ${mode==="1"?"Self":"Servito"} entro 5 km.`;
+  $("status").className="dc-status ok";$("status").textContent=`Completato: ${results.length} distributori con prezzo ${fuel} entro 5 km. I prezzi alternativi non certificano la modalità ${mode==="1"?"self":"servito"}.`;
  }catch(e){$("status").className="dc-status err";$("status").textContent="Errore: "+(e&&e.message?e.message:String(e))}
  finally{$("search").disabled=false}
 }
