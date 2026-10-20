@@ -61,9 +61,10 @@ async function stationsWithin(lat,lon){
  let latDelta=RADIUS_M/111320,lonDelta=RADIUS_M/(111320*Math.max(.2,Math.cos(lat*Math.PI/180)));
  let minCy=Math.floor((lat-latDelta)/GRID),maxCy=Math.floor((lat+latDelta)/GRID);
  let minCx=Math.floor((lon-lonDelta)/GRID),maxCx=Math.floor((lon+lonDelta)/GRID);
- let jobs=[];
- for(let cy=minCy;cy<=maxCy;cy++)for(let cx=minCx;cx<=maxCx;cx++)jobs.push(fetchJson(`${DATA_BASE}/geo/${cy}_${cx}.json`).catch(()=>[]));
+ let jobs=[],failedCells=0;
+ for(let cy=minCy;cy<=maxCy;cy++)for(let cx=minCx;cx<=maxCx;cx++)jobs.push(fetchJson(`${DATA_BASE}/geo/${cy}_${cx}.json`).catch(e=>{failedCells++;return []}));
  let chunks=await Promise.all(jobs),seen=new Map();
+ if(failedCells===jobs.length)throw new Error("Impossibile caricare le celle geografiche dal dataset. Verifica GitHub Pages e la cartella data/geo.");
  for(const arr of chunks)for(const s of arr||[]){
   let id=Number(s[0]),slat=Number(s[1]),slon=Number(s[2]),distance=hav(lat,lon,slat,slon);
   if(distance<=RADIUS_M&&!seen.has(id))seen.set(id,{raw:s,id,lat:slat,lon:slon,distance});
@@ -95,7 +96,7 @@ async function latestPrice(station,fuel,mode){
  const bucket=String(Math.floor(station.id/1000)).padStart(3,"0");
 
  // Evita che GitHub Pages/browser restituiscano un vecchio gzip dalla cache.
- const url=`${DATA_BASE}/prezzi/${bucket}/${station.id}.json.gz?v=${Date.now()}`;
+ const url=`${DATA_BASE}/prezzi/${bucket}/${station.id}.json.gz?v=${new Date().toISOString().slice(0,10)}`;
  const o=await fetchGzip(url).catch(()=>null);
  if(!o)return null;
 
@@ -123,7 +124,7 @@ async function latestPrice(station,fuel,mode){
  if(current.length){
   current.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const latest=current[0];
-  return isFreshMimitDate(latest.date) ? latest : null;
+  return {...latest, stale:!isFreshMimitDate(latest.date)};
  }
 
  // Fallback SOLO se il blocco corrente non contiene affatto quella
@@ -137,7 +138,7 @@ async function latestPrice(station,fuel,mode){
   for(const r of (arr||[])){
    const date=String(r?.[0]||"");
    const price=Number(r?.[1]);
-   if(date && Number.isFinite(price) && price>0 && isFreshMimitDate(date)){
+   if(date && Number.isFinite(price) && price>0){
     historical.push({
      price,date,source:r?.[2]||"MIMIT storico",self,fuel:name
     });
@@ -146,7 +147,7 @@ async function latestPrice(station,fuel,mode){
  }
 
  historical.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
- return historical[0]||null;
+ return historical.length ? {...historical[0],stale:!isFreshMimitDate(historical[0].date)} : null;
 }
 function stationInfo(s){let r=s.raw;return {name:r[3]||r[6]||r[4]||`Impianto ${s.id}`,brand:r[4]||"",address:[r[7],r[8],r[9]].filter(Boolean).join(" — ")}}
 async function resolveAddress(lat,lon){
@@ -184,7 +185,9 @@ function selectStationMarker(s,row){
 }
 function render(results,fuel,mode){
  results.sort((a,b)=>a.price.price-b.price.price||a.distance-b.distance);
- let top=results.slice(0,5);
+ let fresh=results.filter(s=>!s.price.stale);
+ let top=(fresh.length?fresh:results).slice(0,5);
+ const historicalMode=!fresh.length&&results.length>0;
  $("count").textContent=`${top.length} di ${results.length} impianti con prezzo`;
  let tb=$("rows");tb.innerHTML="";
  if(selectedStationMarker){selectedStationMarker.remove();selectedStationMarker=null}
@@ -195,13 +198,13 @@ function render(results,fuel,mode){
  let best=top[0],bi=stationInfo(best);
  $("bestPrice").textContent=`€ ${dec(best.price.price,3)}/L`;
  $("bestName").textContent=bi.name;
- $("bestInfo").textContent=`${(best.distance/1000).toFixed(2).replace(".",",")} km · ${mode==="1"?"Self service":"Servito"} · comunicazione MIMIT ${dt(best.price.date)}`;
+ $("bestInfo").textContent=`${historicalMode?"⚠ PREZZO STORICO NON AGGIORNATO · ":""}${(best.distance/1000).toFixed(2).replace(".",",")} km · ${mode==="1"?"Self service":"Servito"} · comunicazione MIMIT ${dt(best.price.date)}`;
  let rowMap=new Map();
  top.forEach((s,i)=>{
   let info=stationInfo(s),tr=document.createElement("tr");
   if(i===0)tr.className="dc-best-row";
   tr.tabIndex=0;tr.title="Clicca per mostrare questo distributore sulla mappa";
-  tr.innerHTML=`<td>${i+1}</td><td><div class="dc-station">${esc(info.name)}</div><div class="dc-address">${esc(info.address)}</div></td><td>${(s.distance/1000).toFixed(2).replace(".",",")} km</td><td>${esc(fuel)}</td><td>${mode==="1"?"Self":"Servito"}</td><td class="dc-num">€ ${dec(s.price.price,3)}</td><td>${esc(dt(s.price.date))}</td>`;
+  tr.innerHTML=`<td>${i+1}</td><td><div class="dc-station">${esc(info.name)}</div><div class="dc-address">${esc(info.address)}</div></td><td>${(s.distance/1000).toFixed(2).replace(".",",")} km</td><td>${esc(fuel)}</td><td>${mode==="1"?"Self":"Servito"}</td><td class="dc-num">€ ${dec(s.price.price,3)}</td><td>${s.price.stale?"⚠ Storico · ":""}${esc(dt(s.price.date))}</td>`;
   tr.addEventListener("click",()=>selectStationMarker(s,tr));
   tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selectStationMarker(s,tr)}});
   tb.appendChild(tr);rowMap.set(s,tr);
