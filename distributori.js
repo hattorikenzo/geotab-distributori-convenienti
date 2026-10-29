@@ -6,6 +6,7 @@ const GRID=.05;
 const RADIUS_M=5000;
 let api=null,vehicles=[],map=null,vehicleMarker=null,radiusCircle=null,selectedStationMarker=null;
 const jsonCache=new Map(),gzipCache=new Map();
+let priceRequestVersion=Date.now();
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const dec=(n,d=3)=>new Intl.NumberFormat("it-IT",{minimumFractionDigits:d,maximumFractionDigits:d}).format(n);
@@ -96,7 +97,7 @@ async function latestMimitPrice(station,fuel,mode){
  const bucket=String(Math.floor(station.id/1000)).padStart(3,"0");
 
  // Evita che GitHub Pages/browser restituiscano un vecchio gzip dalla cache.
- const url=`${DATA_BASE}/prezzi/${bucket}/${station.id}.json.gz?v=${new Date().toISOString().slice(0,10)}`;
+ const url=`${DATA_BASE}/prezzi/${bucket}/${station.id}.json.gz?v=${priceRequestVersion}`;
  const o=await fetchGzip(url).catch(()=>null);
  if(!o)return null;
 
@@ -154,7 +155,7 @@ async function latestMimitPrice(station,fuel,mode){
 // Non assegnare mai automaticamente la modalità self/servito richiesta.
 async function latestMapPrice(station,fuel){
  const bucket=String(Math.floor(station.id/1000)).padStart(3,"0");
- const url=`${DATA_BASE}/prezzi_mappa/${bucket}/${station.id}.json.gz?v=${new Date().toISOString().slice(0,10)}`;
+ const url=`${DATA_BASE}/prezzi_mappa/${bucket}/${station.id}.json.gz?v=${priceRequestVersion}`;
  const obj=await fetchGzip(url).catch(()=>null);
  const r=obj?.carburanti?.[fuel];
  if(!r || r.modalita!=="non_verificata")return null;
@@ -168,11 +169,13 @@ async function latestPrice(station,fuel,mode){
  const [mimit,alternative]=await Promise.all([
   latestMimitPrice(station,fuel,mode),latestMapPrice(station,fuel)
  ]);
- // Il prezzo alternativo può sostituire quello MIMIT solo se la data
- // è strettamente successiva. A parità di data prevale MIMIT verificato.
- if(alternative && (!mimit || Date.parse(alternative.date)>Date.parse(mimit.date)))
-  return alternative;
- return mimit;
+ // Preferisci sempre un prezzo MIMIT recente e con modalita verificata.
+ if(mimit && !mimit.stale)return mimit;
+ // Usa l'alternativa solo quando MIMIT non ha un prezzo recente.
+ // La modalita alternativa resta non verificata, come mostrato in tabella.
+ if(alternative && !alternative.stale)return alternative;
+ // Mai mostrare prezzi oltre la finestra di freschezza.
+ return null;
 }
 
 function stationInfo(s){let r=s.raw;return {name:r[3]||r[6]||r[4]||`Impianto ${s.id}`,brand:r[4]||"",address:[r[7],r[8],r[9]].filter(Boolean).join(" — ")}}
@@ -223,7 +226,7 @@ function render(results,fuel,mode){
  const tb=$("rows");tb.innerHTML="";
  if(selectedStationMarker){selectedStationMarker.remove();selectedStationMarker=null}
  if(!top.length){
-  tb.innerHTML='<tr><td colspan="7" class="dc-empty">Nessun prezzo disponibile per i criteri selezionati.</td></tr>';
+  tb.innerHTML='<tr><td colspan="7" class="dc-empty">Nessun prezzo comunicato negli ultimi due giorni per i criteri selezionati.</td></tr>';
   $("bestPrice").textContent="—";$("bestName").textContent="Nessun risultato";$("bestInfo").textContent="—";
   return;
  }
